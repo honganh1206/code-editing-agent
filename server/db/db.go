@@ -17,7 +17,7 @@ type Config struct {
 	MaxIdleTime  string
 }
 
-func InitDB(cfg Config, schema string) (*sql.DB, error) {
+func OpenDB(cfg Config, schema string) (*sql.DB, error) {
 	dbDir := filepath.Dir(cfg.Dsn)
 	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 		err = os.MkdirAll(dbDir, 0755)

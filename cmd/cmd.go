@@ -4,21 +4,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
+	"net"
+	"net/http"
 	"time"
 
-	"github.com/honganh1206/clue/agent"
-	"github.com/honganh1206/clue/conversation"
+	"github.com/honganh1206/clue/api"
 	"github.com/honganh1206/clue/inference"
-	"github.com/honganh1206/clue/prompts"
+	"github.com/honganh1206/clue/server"
 	"github.com/honganh1206/clue/utils"
 	"github.com/spf13/cobra"
 )
 
 var (
 	modelConfig  inference.ModelConfig
-	envPath      string
 	verbose      bool
 	continueConv bool
 	convID       string
@@ -37,16 +35,6 @@ func HelpHandler(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func initConversationDsn() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatal("Failed to get home directory:", err)
-	}
-
-	dsn := filepath.Join(homeDir, ".local", ".clue", "conversation.db")
-	return dsn
-}
-
 func ChatHandler(cmd *cobra.Command, args []string) error {
 	new, err := cmd.Flags().GetBool("new-conversation")
 	if err != nil {
@@ -58,17 +46,7 @@ func ChatHandler(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	dsn := initConversationDsn()
-	db, err := conversation.InitDB(dsn)
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %s", err.Error())
-	}
-	defer db.Close()
-
-	// FIXME: Some way to make this more configurable?
-	systemPrompt := prompts.ClaudeSystemPrompt()
-
-	modelConfig.PromptPath = systemPrompt
+	client := api.NewClient("")
 
 	provider := inference.ProviderName(modelConfig.Provider)
 	if modelConfig.Model == "" {
@@ -79,26 +57,40 @@ func ChatHandler(cmd *cobra.Command, args []string) error {
 		modelConfig.Model = string(defaultModel)
 	}
 
-	var conversationID string
+	var convID string
 	if new {
-		conversationID = ""
+		convID = ""
 	} else {
 		if id != "" {
-			conversationID = id
+			convID = id
 		} else {
-			conversationID, err = conversation.LatestID(db)
+			convID, err = client.GetLatestConversationID()
 			if err != nil {
 				return err
 			}
 		}
 	}
 
-	err = agent.Gen(conversationID, modelConfig, db)
+	err = interactive(cmd.Context(), convID, modelConfig, client)
 	if err != nil {
 		fmt.Printf("Error: %s\n", err.Error())
 	}
 
 	return nil
+}
+
+func RunServer(cmd *cobra.Command, args []string) error {
+	ln, err := net.Listen("tcp", ":11435")
+	if err != nil {
+		return err
+	}
+
+	err = server.Serve(ln)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+
+	return err
 }
 
 func ConversationHandler(cmd *cobra.Command, args []string) error {
@@ -119,20 +111,12 @@ func ConversationHandler(cmd *cobra.Command, args []string) error {
 		return errors.New("only one of '--list'")
 	}
 
-	dsn := initConversationDsn()
-	db, err := conversation.InitDB(dsn)
-
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %s", err.Error())
-		return err
-	}
-
-	defer db.Close()
+	client := api.NewClient("")
 
 	if flagsSet == 1 {
 		switch showType {
 		case "list":
-			conversations, err := conversation.List(db)
+			conversations, err := client.ListConversations()
 			if err != nil {
 				log.Fatalf("Error listing conversations: %v", err)
 			}
@@ -208,6 +192,14 @@ func NewCLI() *cobra.Command {
 			fmt.Printf("Clue version %s (commit: %s, built: %s)\n", Version, GitCommit, BuildTime)
 		},
 	}
+
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start clue server",
+		Args:  cobra.ExactArgs(0),
+		RunE:  RunServer,
+	}
+
 	rootCmd := &cobra.Command{
 		Use:   "clue",
 		Short: "An AI agent for code editing and assistance",
@@ -221,7 +213,7 @@ func NewCLI() *cobra.Command {
 	rootCmd.Flags().BoolVarP(&continueConv, "new-conversation", "n", true, "Continue from the latest conversation")
 	rootCmd.Flags().StringVarP(&convID, "id", "i", "", "Conversation ID to ")
 
-	rootCmd.AddCommand(versionCmd, modelCmd, conversationCmd, helpCmd)
+	rootCmd.AddCommand(versionCmd, modelCmd, conversationCmd, helpCmd, serveCmd)
 
 	return rootCmd
 }

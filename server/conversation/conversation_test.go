@@ -45,7 +45,7 @@ func TestConversation_Append(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	msg := MessageParam{
+	msg := MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Hello, world!"),
@@ -69,7 +69,7 @@ func TestConversation_Append(t *testing.T) {
 		t.Error("CreatedAt was not set")
 	}
 
-	msg2 := MessageParam{
+	msg2 := MessagePartRequest{
 		Role: AssistantRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Hello back!"),
@@ -99,14 +99,14 @@ func TestConversation_SaveTo(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("First message"),
 		},
 	})
 
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: AssistantRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Second message"),
@@ -163,7 +163,7 @@ func TestConversation_SaveTo_DuplicateConversation(t *testing.T) {
 		t.Fatalf("New() failed: %v", err)
 	}
 
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Test message"),
@@ -176,7 +176,7 @@ func TestConversation_SaveTo_DuplicateConversation(t *testing.T) {
 	}
 
 	// Add another message and save again
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: AssistantRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Response message"),
@@ -224,7 +224,7 @@ func TestList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	conv1.Append(MessageParam{
+	conv1.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("First conversation message"),
@@ -235,13 +235,13 @@ func TestList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
-	conv2.Append(MessageParam{
+	conv2.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Second conversation message"),
 		},
 	})
-	conv2.Append(MessageParam{
+	conv2.Append(MessagePartRequest{
 		Role: AssistantRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Response to second conversation"),
@@ -391,7 +391,7 @@ func TestLoad(t *testing.T) {
 	}
 
 	// Add text message
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewTextContentBlock("Hello, this is a test message"),
@@ -400,7 +400,7 @@ func TestLoad(t *testing.T) {
 
 	// Add tool use message
 	toolInput := []byte(`{"query": "test"}`)
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: AssistantRole,
 		Content: []ContentBlock{
 			NewToolUseContentBlock("tool-123", "search", toolInput),
@@ -408,7 +408,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	// Add tool result message
-	conv.Append(MessageParam{
+	conv.Append(MessagePartRequest{
 		Role: UserRole,
 		Content: []ContentBlock{
 			NewToolResultContentBlock("tool-123", "Search results here", false),

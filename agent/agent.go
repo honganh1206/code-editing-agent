@@ -1,64 +1,17 @@
 package agent
 
 import (
-	"bufio"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
 	"strings"
 
-	"github.com/honganh1206/clue/conversation"
+	"github.com/honganh1206/clue/api"
 	"github.com/honganh1206/clue/inference"
-	"github.com/honganh1206/clue/prompts"
+	"github.com/honganh1206/clue/message"
+	"github.com/honganh1206/clue/server/conversation"
 	"github.com/honganh1206/clue/tools"
-	_ "github.com/mattn/go-sqlite3"
 )
-
-func Gen(conversationID string, modelConfig inference.ModelConfig, db *sql.DB) error {
-	model, err := inference.Init(modelConfig)
-	if err != nil {
-		log.Fatalf("Failed to initialize model: %s", err.Error())
-	}
-
-	scanner := bufio.NewScanner(os.Stdin)
-	getUserMsg := func() (string, bool) {
-		if !scanner.Scan() {
-			return "", false
-		}
-		return scanner.Text(), true
-	}
-
-	toolDefs := []tools.ToolDefinition{tools.ReadFileDefinition, tools.ListFilesDefinition, tools.EditFileDefinition}
-
-	var a *Agent
-	var conv *conversation.Conversation
-
-	if conversationID != "" {
-		conv, err = conversation.Load(conversationID, db)
-		if err != nil {
-			return err
-		}
-	} else {
-		conv, err = conversation.New()
-		if err != nil {
-			return err
-		}
-	}
-	a = New(model, getUserMsg, conv, toolDefs, prompts.ClaudeSystemPrompt(), db)
-
-	// In production, use Background() as the final root context()
-	// For dev env, TODO for temporary scaffolding
-	err = a.run(context.TODO())
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
 
 type Agent struct {
 	model          inference.Model
@@ -66,18 +19,17 @@ type Agent struct {
 	tools          []tools.ToolDefinition
 	promptPath     string
 	conversation   *conversation.Conversation
-	// FIXME: CRUD operations should be on its own, not a field in Agent
-	db *sql.DB
+	client         *api.Client
 }
 
-func New(model inference.Model, getUserMsg func() (string, bool), conversation *conversation.Conversation, tools []tools.ToolDefinition, promptPath string, db *sql.DB) *Agent {
+func New(model inference.Model, getUserMsg func() (string, bool), conversation *conversation.Conversation, tools []tools.ToolDefinition, promptPath string, client *api.Client) *Agent {
 	return &Agent{
 		model:          model,
 		getUserMessage: getUserMsg,
 		tools:          tools,
 		promptPath:     promptPath,
 		conversation:   conversation,
-		db:             db,
+		client:         client,
 	}
 }
 
@@ -100,7 +52,7 @@ func getModelColor(modelName string) string {
 	}
 }
 
-func (a *Agent) run(ctx context.Context) error {
+func (a *Agent) Run(ctx context.Context) error {
 	modelName := a.model.Name()
 	colorCode := getModelColor(modelName)
 	resetCode := "\u001b[0m"
@@ -111,40 +63,35 @@ func (a *Agent) run(ctx context.Context) error {
 
 	for {
 		if readUserInput {
-
 			fmt.Print("\u001b[94m>\u001b[0m ")
 			userInput, ok := a.getUserMessage()
 			if !ok {
 				break
 			}
 
-			userMsg := conversation.MessageRequest{
-				MessageParam: conversation.MessageParam{
-					Role:    conversation.UserRole,
-					Content: []conversation.ContentBlock{conversation.NewTextContentBlock(userInput)},
-				},
+			userMsg := message.Message{
+				Role:    message.UserRole,
+				Content: []message.ContentBlockUnion{message.NewTextContentBlock(userInput)},
 			}
-			a.conversation.Append(userMsg.MessageParam)
+
+			a.conversation.Messages = append(a.conversation.Messages, &userMsg)
 			a.saveConversation()
 		}
 
-		// TODO: Update with something interactive
-		// fmt.Printf("\u001b[93m%s\u001b[0m: ", modelName)
-
-		agentMsg, err := a.model.RunInference(ctx, a.conversation.Messages, a.tools)
+		agentMsg, err := a.model.CompleteStream(ctx, a.conversation.Messages, a.tools)
 		if err != nil {
 			return err
 		}
 
-		a.conversation.Append(agentMsg.MessageParam)
+		a.conversation.Messages = append(a.conversation.Messages, agentMsg)
 		a.saveConversation()
 
-		toolResults := []conversation.ContentBlock{}
+		toolResults := []message.ContentBlockUnion{}
 
-		for _, content := range agentMsg.Content {
-			switch c := content.(type) {
-			case conversation.ToolUseContentBlock:
-				result := a.executeTool(c.ID, c.Name, c.Input)
+		for _, c := range agentMsg.Content {
+			switch c.Type {
+			case message.ToolUseType:
+				result := a.executeTool(c.OfToolUseBlock.ID, c.OfToolUseBlock.Name, c.OfToolUseBlock.Input)
 				toolResults = append(toolResults, result)
 			}
 		}
@@ -156,24 +103,21 @@ func (a *Agent) run(ctx context.Context) error {
 
 		readUserInput = false
 
-		toolResultMsg := conversation.MessageRequest{
-			MessageParam: conversation.MessageParam{
-				Role:    conversation.UserRole,
-				Content: toolResults,
-			},
+		toolResultMsg := &message.Message{
+			Role:    message.UserRole,
+			Content: toolResults,
 		}
 
-		a.conversation.Append(toolResultMsg.MessageParam)
+		a.conversation.Messages = append(a.conversation.Messages, toolResultMsg)
 		a.saveConversation()
 	}
 
 	return nil
 }
 
-func (a *Agent) executeTool(id, name string, input json.RawMessage) conversation.ContentBlock {
+func (a *Agent) executeTool(id, name string, input json.RawMessage) message.ContentBlockUnion {
 	var toolDef tools.ToolDefinition
 	var found bool
-
 	for _, tool := range a.tools {
 		if tool.Name == name {
 			toolDef = tool
@@ -185,7 +129,7 @@ func (a *Agent) executeTool(id, name string, input json.RawMessage) conversation
 	if !found {
 		// TODO: Return proper error type
 		errorMsg := "tool not found"
-		return conversation.NewToolResultContentBlock(id, errorMsg, true)
+		return message.NewToolResultContentBlock(id, errorMsg, true)
 	}
 
 	fmt.Printf("\u001b[92mtool\u001b[0m: %s(%s)\n", name, input)
@@ -193,21 +137,20 @@ func (a *Agent) executeTool(id, name string, input json.RawMessage) conversation
 	response, err := toolDef.Function(input)
 
 	if err != nil {
-		return conversation.NewToolResultContentBlock(id, err.Error(), true)
+		return message.NewToolResultContentBlock(id, err.Error(), true)
 	}
 
-	return conversation.NewToolResultContentBlock(id, response, true)
+	return message.NewToolResultContentBlock(id, response, false)
 }
 
 func (a *Agent) saveConversation() error {
-	// FIXME: Very drafty. Consider moving the db field out of Agent struct?
-	err := a.conversation.SaveTo(a.db)
-	if err != nil {
-		// 4. Log any errors from history.Save to os.Stderr and return the error.
-		fmt.Fprintf(os.Stderr, "Warning: could not save conversation to DB: %v\n", err)
-		return err
+	if len(a.conversation.Messages) > 0 {
+		err := a.client.SaveConversation(a.conversation)
+		if err != nil {
+			fmt.Printf("DEBUG: Failed conversation details - ConversationID: %s\n", a.conversation.ID)
+			return err
+		}
 	}
 
 	return nil
-
 }

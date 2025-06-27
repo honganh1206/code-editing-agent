@@ -6,30 +6,28 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/honganh1206/clue/conversation"
+	"github.com/honganh1206/clue/message"
 	"github.com/honganh1206/clue/tools"
 )
 
 type Model interface {
 	// FIXME: VERY RESOURCE-CONSUMING since we are invoking this in every loop
 	// What to do? Maintain a parallel flattened view/Flatten incrementally with new messages/Modify the engine
-	RunInference(ctx context.Context, msgs []*conversation.MessageParam, tools []tools.ToolDefinition) (*conversation.MessageResponse, error)
+	CompleteStream(ctx context.Context, msgs []*message.Message, tools []tools.ToolDefinition) (*message.Message, error)
 	Name() string
 }
 
 type ModelConfig struct {
-	Provider   string
-	PromptPath string
-	Model      string
-	MaxTokens  int64
-	ListModel  bool
+	Provider  string
+	Model     string
+	MaxTokens int64
 }
 
 func Init(config ModelConfig) (Model, error) {
 	switch config.Provider {
 	case AnthropicProvider:
 		client := anthropic.NewClient() // Default to look up ANTHROPIC_API_KEY
-		return NewAnthropicModel(&client, config.PromptPath, ModelVersion(config.Model), config.MaxTokens), nil
+		return NewAnthropicModel(&client, ModelVersion(config.Model), config.MaxTokens), nil
 	default:
 		return nil, fmt.Errorf("unknown model provider: %s", config.Provider)
 	}

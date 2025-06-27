@@ -19,3 +19,7 @@ Next tools:
 
 Structural Search Interface (full‑text, regex, and language-aware structural code search)?
 Commit Diff Lookup
+
+Server to handle CRUD for conversations, lifecycle for server
+
+No need for store, that's for local model state
